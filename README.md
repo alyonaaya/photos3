@@ -2,7 +2,7 @@
 
 Консольная утилита для работы с S3.
 
-##Примеры использования
+## Примеры использования
 
 Скачать файл:
 
@@ -10,14 +10,14 @@
 
 Загрузить директорию в хранилище:
 
-        photo.py -l <access_key> -p <secret_key>  -c upload -s /path/to/folder -b <bucket_name>
+    photo.py -l <access_key> -p <secret_key>  -c upload -s /path/to/folder -b <bucket_name>
 
 Скачать бакет в текущую диреткорию:
 
-        photo.py -l <access_key> -p <secret_key>  -c download -b <bucket_name>
+    photo.py -l <access_key> -p <secret_key>  -c download -b <bucket_name>
 
 Посмотреть список файлов в бакете:
 
-        photo.py -l <access_key> -p <secret_key>  -c list -b <bucket_name>
+    photo.py -l <access_key> -p <secret_key>  -c list -b <bucket_name>
 
 Адрес хранилища захардкожен, что бы слишком не перегружать интерфейс: http://localhost:9000 
