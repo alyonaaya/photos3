@@ -108,10 +108,13 @@ async def list_bucket(bucket, client):
     :param client:
     :return:
     """
+    kwargs = dict()
+    kwargs["Bucket"] = bucket
+    continuation_token = ''
     while True:
-        resp = await client.list_objects_v2(Bucket=bucket, FetchOwner=True)
-        if len(resp["Contents"]) == 0:
-            break
+        if continuation_token:
+            kwargs["Marker"] = continuation_token
+        resp = await client.list_objects(**kwargs)
         for obj in resp["Contents"]:
             owner_name = obj["Owner"]["DisplayName"]
             owner_name = "unknown" if len(owner_name) == 0 else owner_name
@@ -119,7 +122,10 @@ async def list_bucket(bucket, client):
             dt = obj["LastModified"]
             key = obj["Key"]
             print("{} {} {} {}".format(owner_name, owner_id, dt.strftime("%Y-%m-%d %H:%M:%S %Z"), key))
-    print(dir(client))
+        if not resp.get("IsTruncated"):
+            break
+        continuation_token = resp.get('NextMarker')
+
 
 async def download_bucket(bucket, client):
     """
