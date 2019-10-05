@@ -33,7 +33,7 @@ commands = [C_DOWNLOAD, C_GET, C_LIST, C_UPLOAD]
 """
 # Адрес хранилища
 storage_url = 'http://localhost:9000'
-# Число одновременно запущенных корутин
+# Число одновременных запросов и лимит на число одновременно запущенных корутин
 concurrency = 10
 
 
@@ -90,10 +90,13 @@ async def download_one_file(src, dest, bucket, client, sem=asyncio.Semaphore(1))
     async with sem:
         resp = await client.get_object(Bucket=bucket, Key=src)
         async with resp["Body"] as stream:
-            data = await stream.read()
             out_file_name = os.path.join(dest, os.path.basename(src))
             with open(out_file_name, "wb") as out_file:
-                out_file.write(data)
+                while True:
+                    data = await stream.read(1024)
+                    if len(data) == 0:
+                        break
+                    out_file.write(data)
             print("{} downloaded to {}".format(src, out_file_name))
 
 
@@ -167,13 +170,27 @@ async def upload(src, bucket, client):
     src_full = os.path.abspath(src)
     one_level_upper = os.path.abspath(os.path.join(src_full, "../"))
 
+    conum = 0
+
     for path, dirs, files in os.walk(src_full):
         key = path[len(one_level_upper) + 1:]
         for file in files:
+            conum += 1
             in_file_name = os.path.join(path, file)
             out_file_name = os.path.join(key, file)
             upload_tasks.append(asyncio.ensure_future(upload_one_file(in_file_name, out_file_name, bucket, client, sem)))
 
+            '''# Как только достигаем лимита на запущенные корутины, запускаем их
+            if conum == limit:
+                await asyncio.wait(upload_tasks)
+                print("Uploaded {} files".format(len(upload_tasks)))
+                upload_tasks.clear()
+                conum = 0
+
+    # Выполняем оставшееся
+    if len(upload_tasks) != 0:
+        print("Uploaded {} files".format(len(upload_tasks)))
+        await asyncio.wait(upload_tasks)'''
     await asyncio.wait(upload_tasks)
 
 
