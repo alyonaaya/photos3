@@ -140,21 +140,31 @@ async def download_bucket(bucket, client):
     # Семафор ограничивает потребляемые ресурсы
     sem = asyncio.Semaphore(concurrency)
 
-    # Сначала формируется список файлов, содержащхся в бакете
-    resp = await client.list_objects(Bucket=bucket)
-    for obj in resp["Contents"]:
-        directories = [bucket]
-        outdir = ""
-        key = obj["Key"]
-        path = key.split("/")
-        directories.extend(path[:-1])
-        for directory in directories:
-            outdir = os.path.join(outdir, directory)
-            if not os.path.exists(outdir):
-                os.mkdir(outdir)
-        # На основе списка файлов из хранилища формируются задания на скачивание файлов по одному
-        download_tasks.append(asyncio.ensure_future(download_one_file(key, outdir, bucket, client, sem)))
-        # Внутренний асинхронный цикл
+    kwargs = dict()
+    kwargs["Bucket"] = bucket
+    continuation_token = ''
+    while True:
+        if continuation_token:
+            kwargs["Marker"] = continuation_token
+        resp = await client.list_objects(**kwargs)
+
+        for obj in resp["Contents"]:
+            directories = [bucket]
+            outdir = ""
+            key = obj["Key"]
+            path = key.split("/")
+            directories.extend(path[:-1])
+            for directory in directories:
+                outdir = os.path.join(outdir, directory)
+                if not os.path.exists(outdir):
+                    os.mkdir(outdir)
+            # На основе списка файлов из хранилища формируются задания на скачивание файлов по одному
+            download_tasks.append(asyncio.ensure_future(download_one_file(key, outdir, bucket, client, sem)))
+            # Внутренний асинхронный цикл
+        if not resp.get("IsTruncated"):
+            break
+        continuation_token = resp.get('NextMarker')
+
     await asyncio.wait(download_tasks)
 
 
