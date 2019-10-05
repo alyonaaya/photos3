@@ -5,6 +5,7 @@ import aiobotocore
 import click
 import os
 import sys
+import time
 from botocore.exceptions import ClientError
 
 
@@ -34,7 +35,7 @@ commands = [C_DOWNLOAD, C_GET, C_LIST, C_UPLOAD]
 # Адрес хранилища
 storage_url = 'http://localhost:9000'
 # Число одновременных запросов и лимит на число одновременно запущенных корутин
-concurrency = 10
+concurrency = 5
 
 
 def error_handler(f):
@@ -107,15 +108,18 @@ async def list_bucket(bucket, client):
     :param client:
     :return:
     """
-    resp = await client.list_objects(Bucket=bucket)
-    for obj in resp["Contents"]:
-        owner_name = obj["Owner"]["DisplayName"]
-        owner_name = "unknown" if len(owner_name) == 0 else owner_name
-        owner_id = obj["Owner"]["ID"]
-        dt = obj["LastModified"]
-        key = obj["Key"]
-        print("{} {} {} {}".format(owner_name, owner_id, dt.strftime("%Y-%m-%d %H:%M:%S %Z"), key))
-
+    while True:
+        resp = await client.list_objects_v2(Bucket=bucket, FetchOwner=True)
+        if len(resp["Contents"]) == 0:
+            break
+        for obj in resp["Contents"]:
+            owner_name = obj["Owner"]["DisplayName"]
+            owner_name = "unknown" if len(owner_name) == 0 else owner_name
+            owner_id = obj["Owner"]["ID"]
+            dt = obj["LastModified"]
+            key = obj["Key"]
+            print("{} {} {} {}".format(owner_name, owner_id, dt.strftime("%Y-%m-%d %H:%M:%S %Z"), key))
+    print(dir(client))
 
 async def download_bucket(bucket, client):
     """
@@ -180,18 +184,16 @@ async def upload(src, bucket, client):
             out_file_name = os.path.join(key, file)
             upload_tasks.append(asyncio.ensure_future(upload_one_file(in_file_name, out_file_name, bucket, client, sem)))
 
-            '''# Как только достигаем лимита на запущенные корутины, запускаем их
-            if conum == limit:
+            # Как только достигаем лимита на запущенные корутины, запускаем их
+            if conum == concurrency:
                 await asyncio.wait(upload_tasks)
                 print("Uploaded {} files".format(len(upload_tasks)))
                 upload_tasks.clear()
                 conum = 0
 
-    # Выполняем оставшееся
-    if len(upload_tasks) != 0:
+    if len(upload_tasks) > 0:
+        await asyncio.wait(upload_tasks)
         print("Uploaded {} files".format(len(upload_tasks)))
-        await asyncio.wait(upload_tasks)'''
-    await asyncio.wait(upload_tasks)
 
 
 @error_handler
