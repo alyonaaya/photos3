@@ -5,7 +5,7 @@ import aiobotocore
 import click
 import os
 import sys
-import time
+import random
 from botocore.exceptions import ClientError
 
 
@@ -38,9 +38,14 @@ storage_url = 'http://localhost:9000'
 concurrency = 5
 
 
+"""
+Обработка ошибок
+"""
+
+
 def error_handler(f):
     """
-    Обработчик ошибок
+    Общий обработчик ошибок
     :param f: Асинхронная функция
     :return: Пытается выполнить, иначе обработать возникшую ошибку
     """
@@ -53,12 +58,24 @@ def error_handler(f):
             sys.exit(str(fne))
         except ValueError as ve:
             sys.exit(str(ve))
+        except Exception as ex:
+            sys.exit(str(ex))
     return wrapper
+
+
+def handle_one_error(loop, context):
+    """
+    Обработчик ошибок в корутине
+    :param loop:
+    :param context:
+    :return:
+    """
+    msg = context.get("exception", context["message"])
+    sys.stderr.write(f"Caught exception: {msg}\n")
 
 
 """
 Асинхронные функции.
-Каждая выполняет одно завершённое действие.
 Предназначены для добавления в цикл событий.
 """
 
@@ -140,15 +157,19 @@ async def download_bucket(bucket, client):
     # Семафор ограничивает потребляемые ресурсы
     sem = asyncio.Semaphore(concurrency)
 
+    conum = 0
+
     kwargs = dict()
     kwargs["Bucket"] = bucket
     continuation_token = ''
+
     while True:
         if continuation_token:
             kwargs["Marker"] = continuation_token
         resp = await client.list_objects(**kwargs)
 
         for obj in resp["Contents"]:
+            conum += 1
             directories = [bucket]
             outdir = ""
             key = obj["Key"]
@@ -160,12 +181,18 @@ async def download_bucket(bucket, client):
                     os.mkdir(outdir)
             # На основе списка файлов из хранилища формируются задания на скачивание файлов по одному
             download_tasks.append(asyncio.ensure_future(download_one_file(key, outdir, bucket, client, sem)))
-            # Внутренний асинхронный цикл
+
+            if conum == concurrency:
+                await asyncio.wait(download_tasks)
+                download_tasks.clear()
+                conum = 0
+
         if not resp.get("IsTruncated"):
             break
         continuation_token = resp.get('NextMarker')
 
-    await asyncio.wait(download_tasks)
+    if len(download_tasks) != 0:
+        await asyncio.wait(download_tasks)
 
 
 """
@@ -203,13 +230,11 @@ async def upload(src, bucket, client):
             # Как только достигаем лимита на запущенные корутины, запускаем их
             if conum == concurrency:
                 await asyncio.wait(upload_tasks)
-                print("Uploaded {} files".format(len(upload_tasks)))
                 upload_tasks.clear()
                 conum = 0
 
     if len(upload_tasks) > 0:
         await asyncio.wait(upload_tasks)
-        print("Uploaded {} files".format(len(upload_tasks)))
 
 
 @error_handler
@@ -257,6 +282,7 @@ def main(login, password, command, src, dest, bucket):
 
     # Сформированный список заданий подаётся в цикл
     loop = asyncio.get_event_loop()
+    loop.set_exception_handler(handle_one_error)
     loop.run_until_complete(async_main(login, password, command, src, dest, bucket, loop))
 
 
