@@ -51,12 +51,8 @@ def error_handler(f):
     async def wrapper(*args, **kwargs):
         try:
             return await f(*args, **kwargs)
-        except ClientError as ce:
-            sys.exit(ce.response["Error"]["Message"])
-        except FileNotFoundError as fne:
-            sys.exit(str(fne))
-        except ValueError as ve:
-            sys.exit(str(ve))
+        except Exception as e:
+            sys.exit(str(e))
     return wrapper
 
 
