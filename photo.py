@@ -5,7 +5,6 @@ import aiobotocore
 import click
 import os
 import sys
-import random
 from botocore.exceptions import ClientError
 
 
@@ -35,7 +34,7 @@ commands = [C_DOWNLOAD, C_GET, C_LIST, C_UPLOAD]
 # Адрес хранилища
 storage_url = 'http://localhost:9000'
 # Число одновременных запросов и лимит на число одновременно запущенных корутин
-concurrency = 5
+concurrency = 10
 
 
 """
@@ -58,8 +57,6 @@ def error_handler(f):
             sys.exit(str(fne))
         except ValueError as ve:
             sys.exit(str(ve))
-        except Exception as ex:
-            sys.exit(str(ex))
     return wrapper
 
 
@@ -76,6 +73,7 @@ def handle_one_error(loop, context):
 
 """
 Асинхронные функции.
+Делают одно завершенное действие.
 Предназначены для добавления в цикл событий.
 """
 
@@ -120,7 +118,7 @@ async def download_one_file(src, dest, bucket, client, sem=asyncio.Semaphore(1))
 
 async def list_bucket(bucket, client):
     """
-    Функция для просмотра файлов в бакете
+    Функция для получения списка объектов в бакете
     :param bucket: Название бакета
     :param client:
     :return:
@@ -138,10 +136,27 @@ async def list_bucket(bucket, client):
             owner_id = obj["Owner"]["ID"]
             dt = obj["LastModified"]
             key = obj["Key"]
-            print("{} {} {} {}".format(owner_name, owner_id, dt.strftime("%Y-%m-%d %H:%M:%S %Z"), key))
+            yield (owner_name, owner_id, dt.strftime("%Y-%m-%d %H:%M:%S %Z"), key)
         if not resp.get("IsTruncated"):
             break
         continuation_token = resp.get('NextMarker')
+
+
+"""
+Асинхронные функции обработчики пользовательских команд
+Высчитывают параметры для каждого задания, формируют очереди заданий.
+"""
+
+
+async def print_bucket(bucket, client):
+    """
+    Функция, показвающая, какие файлы находтся в бакете
+    :param bucket:
+    :param client:
+    :return:
+    """
+    async for owner_name, owner_id, sdt, key in list_bucket(bucket, client):
+        print("{} {} {} {}".format(owner_name, owner_id, sdt, key))
 
 
 async def download_bucket(bucket, client):
@@ -159,46 +174,29 @@ async def download_bucket(bucket, client):
 
     conum = 0
 
-    kwargs = dict()
-    kwargs["Bucket"] = bucket
-    continuation_token = ''
+    async for _, _, _, key in list_bucket(bucket, client):
+        conum += 1
+        directories = [bucket]
+        outdir = ""
+        path = key.split("/")
+        directories.extend(path[:-1])
+        for directory in directories:
+            outdir = os.path.join(outdir, directory)
+            if not os.path.exists(outdir):
+                os.mkdir(outdir)
 
-    while True:
-        if continuation_token:
-            kwargs["Marker"] = continuation_token
-        resp = await client.list_objects(**kwargs)
+        # На основе списка файлов из хранилища формируются задания на скачивание файлов по одному
+        download_tasks.append(asyncio.ensure_future(download_one_file(key, outdir, bucket, client, sem)))
 
-        for obj in resp["Contents"]:
-            conum += 1
-            directories = [bucket]
-            outdir = ""
-            key = obj["Key"]
-            path = key.split("/")
-            directories.extend(path[:-1])
-            for directory in directories:
-                outdir = os.path.join(outdir, directory)
-                if not os.path.exists(outdir):
-                    os.mkdir(outdir)
-            # На основе списка файлов из хранилища формируются задания на скачивание файлов по одному
-            download_tasks.append(asyncio.ensure_future(download_one_file(key, outdir, bucket, client, sem)))
+        # Когда достигнут лимит на создание корутин, запускается скачивание
+        if conum == concurrency:
+            await asyncio.wait(download_tasks)
+            download_tasks.clear()
+            conum = 0
 
-            if conum == concurrency:
-                await asyncio.wait(download_tasks)
-                download_tasks.clear()
-                conum = 0
-
-        if not resp.get("IsTruncated"):
-            break
-        continuation_token = resp.get('NextMarker')
-
+    # Скачивание оставшихся файлов
     if len(download_tasks) != 0:
         await asyncio.wait(download_tasks)
-
-
-"""
-Функции, формирующие задания.
-Высчитывают параметры для каждого задания, формируют очереди заданий.
-"""
 
 
 async def upload(src, bucket, client):
@@ -227,12 +225,13 @@ async def upload(src, bucket, client):
             out_file_name = os.path.join(key, file)
             upload_tasks.append(asyncio.ensure_future(upload_one_file(in_file_name, out_file_name, bucket, client, sem)))
 
-            # Как только достигаем лимита на запущенные корутины, запускаем их
+            # Как только достигнут лимит на запущенные корутины, запускается загрузка файлов
             if conum == concurrency:
                 await asyncio.wait(upload_tasks)
                 upload_tasks.clear()
                 conum = 0
 
+    # Загрузка отсавшихся файлов
     if len(upload_tasks) > 0:
         await asyncio.wait(upload_tasks)
 
@@ -263,7 +262,7 @@ async def async_main(login, password, command, src, dest, bucket, loop):
         elif command == C_GET:
             await download_one_file(src, dest, bucket, client)
         elif command == C_LIST:
-            await list_bucket(bucket, client)
+            await print_bucket(bucket, client)
         elif command == C_UPLOAD:
             await upload(src, bucket, client)
         else:
