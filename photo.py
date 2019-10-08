@@ -119,13 +119,9 @@ async def list_bucket(bucket, client):
     :param client:
     :return:
     """
-    kwargs = dict()
-    kwargs["Bucket"] = bucket
     continuation_token = ''
     while True:
-        if continuation_token:
-            kwargs["Marker"] = continuation_token
-        resp = await client.list_objects(**kwargs)
+        resp = await client.list_objects(Bucket=bucket, Marker=continuation_token)
         for obj in resp["Contents"]:
             owner_name = obj["Owner"]["DisplayName"]
             owner_name = "unknown" if len(owner_name) == 0 else owner_name
